@@ -68,6 +68,7 @@ import { uploadReportToStorage, downloadFileFromStorage, getBucketName, sanitize
 import PdfViewer from "./PdfViewer";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import { getPdfDownloadUrl } from "../lib/pdfService";
+import { dataUrlToBlob } from "../utils/pdfUtils";
 import { supabase } from "../lib/supabaseClient";
 import ChapterProgressBottomSheet from "./ChapterProgressBottomSheet";
 import { getChapterProgressRecord, getStatusConfig } from "../utils/chapterProgressHelper";
@@ -1626,20 +1627,11 @@ export function StudentMyTab({
     if (!fileName.endsWith(".pdf")) fileName += ".pdf";
 
     // Handle inline Base64 data URLs
-    if (url.startsWith("data:")) {
+    if (url.startsWith("data:") || url.startsWith("JVBERi")) {
       try {
         setDownloadProgress(50);
-        const arr = url.split(",");
-        const mimeMatch = arr[0].match(/:(.*?);/);
-        const mime = mimeMatch ? mimeMatch[1] : "application/pdf";
-        const bstr = atob(arr[1]);
-        let n = bstr.length;
-        const u8arr = new Uint8Array(n);
-        while (n--) {
-          u8arr[n] = bstr.charCodeAt(n);
-        }
+        const blob = await dataUrlToBlob(url);
         setDownloadProgress(100);
-        const blob = new Blob([u8arr], { type: mime });
         
         const blobUrl = URL.createObjectURL(blob);
         const link = document.createElement("a");

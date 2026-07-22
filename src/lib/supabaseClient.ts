@@ -73,7 +73,7 @@ function createMockSupabaseClient() {
               url = URL.createObjectURL(blob);
             } else {
               if (path.endsWith(".pdf")) {
-                url = "data:application/pdf;base64,JVBERi0xLjQKMSAwIG9iago8PAovVHlwZSAvQ2F0YWxvZwovUGFnZXMgMiAwIFIKPj4KZW5kb2JqCjIgMCBvYmoKPDYKL1R5cGUgL1BhZ2VzCi9LaWRzIFszIDAgUl0KL0NvdW50IDEKPj4KZW5kb2JqCjMgMCBvYmoKPDYKL1R5cGUgL1BhZ2UKL1BhcmVudCAyIDAgUgovTWVkaWFCb3ggWzAgMCA1OTUgODQyXQovQ29udGVudHMgNCAwIFIKPj4KZW5kb2JqCjQgMCBvYmoKPDYKL0xlbmd0aCA0OQo+PgpzdHJlYW0KQlQKL0YxIDEyIFRmCjcyIDcyIFRkCihNb2NrIFBERiBDb250ZW50IC0gU3VwYWJhc2UgT2ZmbOfflineeSlCg==\n";
+                url = "data:application/pdf;base64,JVBERi0xLjQKMSAwIG9iago8PAovVGl0bGUgKFR1aXRpb24gTm90ZXMpCi9DcmVhdG9yIChBY2FkZW15IExlZGdlcikKPj4KZW5kb2JqCnhyZWYKMCAxCjAwMDAwMDAwMDAgNjU1MzUgZiAKdHJhaWxlcgo8PAovU2l6ZSAyCi9Sb290IDEgMCBSCj4+CnN0YXJ0eHJlZgoxMAolJUVPRgo=";
               } else {
                 url = `https://picsum.photos/200`;
               }

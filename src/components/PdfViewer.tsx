@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { Capacitor } from "@capacitor/core";
 import { getPdfDownloadUrl } from "../lib/pdfService";
+import { dataUrlToBlob } from "../utils/pdfUtils";
 
 // Preload PDF.js script and worker from CDN in background
 export function preloadPdfJs() {
@@ -469,19 +470,11 @@ export default function PdfViewer({ url, title, onClose, noteId, storagePath, bu
         if (!pdfBlob) {
           setStatusText("Downloading document… 0%");
 
-          if (dlUrl.startsWith("data:")) {
+          if (dlUrl.startsWith("data:") || dlUrl.startsWith("JVBERi")) {
             try {
-              const parts = dlUrl.split(",");
-              const mimeMatch = parts[0].match(/:(.*?);/);
-              const mime = mimeMatch ? mimeMatch[1] : "application/pdf";
-              const base64Data = parts[1] || "";
-              const bstr = atob(base64Data);
-              let n = bstr.length;
-              const u8arr = new Uint8Array(n);
-              while (n--) {
-                u8arr[n] = bstr.charCodeAt(n);
-              }
-              pdfBlob = new Blob([u8arr], { type: mime });
+              pdfBlob = await dataUrlToBlob(dlUrl);
+              const blobObjUrl = URL.createObjectURL(pdfBlob);
+              setResolvedUrl(blobObjUrl);
               console.log(`[PDF LOAD DIAGNOSTICS] Successfully decoded inline base64 PDF (${pdfBlob.size} bytes).`);
             } catch (e: any) {
               throw new Error(`Failed to read inline PDF document: ${e.message}`);
