@@ -414,6 +414,26 @@ export default function PdfViewer({ url, title, onClose, noteId, storagePath, bu
     let active = true;
     let xhr: XMLHttpRequest | null = null;
 
+    const formatPdfError = (message: string, extra?: Record<string, unknown>) => {
+      const detail = extra ? ` ${JSON.stringify(extra)}` : "";
+      if (message.includes("File not found") || message.includes("404")) {
+        return `File not found${detail}`;
+      }
+      if (message.includes("Permission") || message.includes("403") || message.includes("Access denied")) {
+        return `Permission denied${detail}`;
+      }
+      if (message.includes("Empty file")) {
+        return `Empty file${detail}`;
+      }
+      if (message.includes("Invalid PDF") || message.includes("Corrupted") || message.includes("PDFHeader") || message.includes("format")) {
+        return `Invalid PDF${detail}`;
+      }
+      if (message.includes("Invalid storage path")) {
+        return `Invalid storage path${detail}`;
+      }
+      return message || `Unable to open PDF${detail}`;
+    };
+
     async function loadDocument() {
       try {
         setLoading(true);
@@ -430,9 +450,9 @@ export default function PdfViewer({ url, title, onClose, noteId, storagePath, bu
 
         console.log(`================ [PDF LOAD DIAGNOSTICS] ================`);
         console.log(`- Firestore document ID / Note ID: ${noteId || "N/A"}`);
+        console.log(`- bucket: ${bucket || "academy-connect-files"}`);
         console.log(`- storagePath: ${storagePath || url}`);
-        console.log(`- bucket name: ${bucket || "academy-connect-files"}`);
-        console.log(`- generated signed URL: ${dlUrl}`);
+        console.log(`- generatedUrl: ${dlUrl}`);
 
         // If native Capacitor Android or user prefers native viewing, set native viewer fallback
         if (isCapacitorNative) {
@@ -527,6 +547,12 @@ export default function PdfViewer({ url, title, onClose, noteId, storagePath, bu
                   console.log(`[PDF LOAD DIAGNOSTICS] HTTP Status: ${status}`);
                   console.log(`[PDF LOAD DIAGNOSTICS] Content-Type: ${contentType}`);
                   console.log(`[PDF LOAD DIAGNOSTICS] Response Headers:\n${headers}`);
+                  console.log(`[PDF LOAD DIAGNOSTICS] Response Size: ${xhr?.response?.size ?? "unknown"}`);
+
+                  if (contentType && !contentType.toLowerCase().includes("application/pdf")) {
+                    reject(new Error(`Unexpected Content-Type: ${contentType}`));
+                    return;
+                  }
 
                   if ((status >= 200 && status < 300) || status === 0) {
                     if (xhr?.response && xhr.response.size > 0) {
@@ -561,10 +587,14 @@ export default function PdfViewer({ url, title, onClose, noteId, storagePath, bu
               console.warn(`[PdfViewer] XHR download failed (${xhrErr.message}). Attempting fetch API fallback...`);
               try {
                 const fetchRes = await fetch(dlUrl);
+                const fetchContentType = fetchRes.headers.get("content-type") || "unknown";
                 console.log(`[PDF LOAD DIAGNOSTICS] Fallback fetch status: ${fetchRes.status}`);
-                console.log(`[PDF LOAD DIAGNOSTICS] Fallback fetch content-type: ${fetchRes.headers.get("content-type")}`);
+                console.log(`[PDF LOAD DIAGNOSTICS] Fallback fetch content-type: ${fetchContentType}`);
                 if (!fetchRes.ok) {
                   throw new Error(`Server returned HTTP status ${fetchRes.status}`);
+                }
+                if (fetchContentType && !fetchContentType.toLowerCase().includes("application/pdf")) {
+                  throw new Error(`Unexpected Content-Type: ${fetchContentType}`);
                 }
                 pdfBlob = await fetchRes.blob();
               } catch (fetchErr: any) {
@@ -590,9 +620,23 @@ export default function PdfViewer({ url, title, onClose, noteId, storagePath, bu
         }
 
         if (!active) return;
+        if (!pdfBlob) {
+          throw new Error("File not found.");
+        }
+        if (!(pdfBlob instanceof Blob)) {
+          throw new Error("Invalid PDF response.");
+        }
+        if (pdfBlob.size <= 0) {
+          throw new Error("Empty file.");
+        }
+        if (pdfBlob.type && pdfBlob.type !== "application/pdf") {
+          throw new Error(`Invalid PDF MIME type: ${pdfBlob.type}`);
+        }
+
+        console.log(`[PDF LOAD DIAGNOSTICS] Blob validated. mimeType=${pdfBlob.type || "unknown"}, size=${pdfBlob.size}`);
         setStatusText("Rendering document pages...");
 
-        const arrayBuffer = await pdfBlob!.arrayBuffer();
+        const arrayBuffer = await pdfBlob.arrayBuffer();
         const pdfjsLib = (window as any).pdfjsLib;
         const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
 
@@ -603,20 +647,22 @@ export default function PdfViewer({ url, title, onClose, noteId, storagePath, bu
           console.log(`[PdfViewer] Successfully opened PDF (${pdfDoc.numPages} pages).`);
         }
       } catch (err: any) {
-        console.error(`[PdfViewer] Failed to load PDF:`, err);
+        console.error(`[PdfViewer] Failed to load PDF:`, {
+          bucket: bucket || "academy-connect-files",
+          storagePath: storagePath || url,
+          generatedUrl: resolvedUrl || url,
+          supabaseError: err,
+          stack: err?.stack,
+        });
         if (active) {
           const msg = err.message || "";
-          if (msg.includes("404") || msg.includes("not found")) {
-            setError("Document file not found in storage (404).");
-          } else if (msg.includes("Permission") || msg.includes("403") || msg.includes("Access")) {
-            setError("Access denied: You do not have permission to view this document.");
-          } else if (msg.includes("Network") || msg.includes("Failed to fetch") || msg.includes("connection")) {
-            setError("Network error: Could not reach the server. Please check your connection.");
-          } else if (msg.includes("PDFHeader") || msg.includes("format") || msg.includes("Invalid")) {
-            setError("The uploaded file is not a valid or readable PDF document.");
-          } else {
-            setError(msg || "Unable to open document.");
-          }
+          setError(formatPdfError(msg, {
+            bucket: bucket || "academy-connect-files",
+            storagePath: storagePath || url,
+            generatedUrl: resolvedUrl || url,
+            supabaseError: err?.message || err,
+            stack: err?.stack,
+          }));
           setLoading(false);
         }
       }

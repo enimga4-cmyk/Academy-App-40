@@ -57,28 +57,17 @@ function createMockSupabaseClient() {
           getPublicUrl(path: string) {
             console.log(`[Supabase Mock] getPublicUrl for ${bucket}/${path}`);
             const blob = mockStorage.get(`${bucket}/${path}`);
-            let url = "";
-            if (blob) {
-              url = URL.createObjectURL(blob);
-            } else {
-              url = `https://picsum.photos/200`;
-            }
-            return { data: { publicUrl: url } };
+            const url = `https://mock-supabase.local/storage/v1/object/public/${bucket}/${path}`;
+            return { data: { publicUrl: url }, error: blob ? null : { message: "Object not found in mock storage." } };
           },
           async createSignedUrl(path: string, expiresIn: number) {
             console.log(`[Supabase Mock] createSignedUrl for ${bucket}/${path}`);
             const blob = mockStorage.get(`${bucket}/${path}`);
-            let url = "";
-            if (blob) {
-              url = URL.createObjectURL(blob);
-            } else {
-              if (path.endsWith(".pdf")) {
-                url = "data:application/pdf;base64,JVBERi0xLjQKMSAwIG9iago8PAovVGl0bGUgKFR1aXRpb24gTm90ZXMpCi9DcmVhdG9yIChBY2FkZW15IExlZGdlcikKPj4KZW5kb2JqCnhyZWYKMCAxCjAwMDAwMDAwMDAgNjU1MzUgZiAKdHJhaWxlcgo8PAovU2l6ZSAyCi9Sb290IDEgMCBSCj4+CnN0YXJ0eHJlZgoxMAolJUVPRgo=";
-              } else {
-                url = `https://picsum.photos/200`;
-              }
-            }
-            return { data: { signedUrl: url }, error: null };
+            const url = `https://mock-supabase.local/storage/v1/object/sign/${bucket}/${path}?expiresIn=${expiresIn}`;
+            return {
+              data: { signedUrl: url },
+              error: blob ? null : { message: "Object not found in mock storage." }
+            };
           }
         };
       }
@@ -86,10 +75,22 @@ function createMockSupabaseClient() {
   };
 }
 
+function getRuntimeEnvValue(key: string, fallback = ""): string {
+  try {
+    const env = typeof import.meta !== "undefined" ? (import.meta as any).env : undefined;
+    if (env && typeof env[key] === "string") {
+      return env[key];
+    }
+  } catch {
+    // Ignore env lookup issues in non-Vite runtimes.
+  }
+  return fallback;
+}
+
 function getClient() {
   if (!supabaseInstance) {
-    const rawSupabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+    const rawSupabaseUrl = getRuntimeEnvValue("VITE_SUPABASE_URL");
+    const supabaseAnonKey = getRuntimeEnvValue("VITE_SUPABASE_ANON_KEY");
     if (!rawSupabaseUrl || !supabaseAnonKey) {
       supabaseInstance = createMockSupabaseClient();
     } else {

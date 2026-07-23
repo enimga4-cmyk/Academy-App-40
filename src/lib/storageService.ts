@@ -1,5 +1,62 @@
 import { supabase } from "./supabaseClient";
 
+const PDF_MIME_TYPE = "application/pdf";
+
+function getRuntimeEnvValue(key: string, fallback = ""): string {
+  try {
+    const env = typeof import.meta !== "undefined" ? (import.meta as any).env : undefined;
+    if (env && typeof env[key] === "string") {
+      return env[key];
+    }
+  } catch {
+    // Ignore env lookup issues in non-Vite runtimes.
+  }
+  return fallback;
+}
+
+function isInvalidStorageReference(input: string): boolean {
+  const clean = String(input || "").trim().toLowerCase();
+  return (
+    clean.startsWith("blob:") ||
+    clean.startsWith("data:") ||
+    clean.startsWith("file://") ||
+    clean.includes("localhost") ||
+    clean.includes("127.0.0.1") ||
+    clean.includes("temporary") ||
+    clean.includes("temp/") ||
+    clean.includes("tmp/")
+  );
+}
+
+function normalizeUploadedStoragePath(bucket: string, rawPath: string): string {
+  const sanitized = sanitizeStoragePath(rawPath, bucket);
+  if (!sanitized) {
+    throw new Error("Invalid storage path specified.");
+  }
+  return sanitized;
+}
+
+function validatePdfBlob(blob: Blob | null): Blob {
+  if (!blob) {
+    throw new Error("File not found.");
+  }
+
+  if (!(blob instanceof Blob)) {
+    throw new Error("Invalid PDF response.");
+  }
+
+  if (blob.size <= 0) {
+    throw new Error("Empty file.");
+  }
+
+  const mimeType = (blob.type || "").toLowerCase();
+  if (mimeType && mimeType !== PDF_MIME_TYPE) {
+    throw new Error(`Invalid PDF MIME type: ${mimeType}`);
+  }
+
+  return blob;
+}
+
 export interface SupabaseUploadMetadata {
   storageProvider: "supabase";
   bucket: string;
@@ -26,7 +83,7 @@ export function getBucketName(customBucket?: string): string {
       return cleanCustom;
     }
   }
-  const envBucket = import.meta.env.VITE_SUPABASE_BUCKET || "academy-connect-files";
+  const envBucket = getRuntimeEnvValue("VITE_SUPABASE_BUCKET", "academy-connect-files");
   return envBucket.trim().replace(/^\/+|\/+$/g, "");
 }
 
@@ -44,6 +101,11 @@ export function sanitizeStoragePath(rawPath: string | null | undefined, bucketNa
 
   let cleaned = String(rawPath).trim();
   if (!cleaned) return "";
+
+  if (isInvalidStorageReference(cleaned)) {
+    console.error(`[StorageService] Rejected invalid storage reference:`, cleaned);
+    return "";
+  }
 
   // 0. Handle JSON metadata strings
   if (cleaned.startsWith("{")) {
@@ -185,8 +247,8 @@ export async function uploadFileToSupabase(
   onProgress?: (percent: number) => void
 ): Promise<SupabaseUploadMetadata> {
   const bucket = getBucketName(bucketInput);
-  const sanitizedPath = sanitizeStoragePath(rawPath, bucket);
-  const mimeType = file.type || "application/pdf";
+  const sanitizedPath = normalizeUploadedStoragePath(bucket, rawPath);
+  const mimeType = file.type || PDF_MIME_TYPE;
 
   console.log(`[StorageService] Uploading file to Supabase Storage:`);
   console.log(`  - Bucket Name: "${bucket}"`);
@@ -233,7 +295,7 @@ export async function uploadFileToSupabase(
   } catch (urlError) {
     console.warn("[StorageService] Failed to generate signed URL post-upload, using publicUrl fallback:", urlError);
     const { data: publicData } = supabase.storage.from(bucket).getPublicUrl(successPath);
-    downloadUrl = publicData.publicUrl;
+    downloadUrl = publicData?.publicUrl || "";
   }
 
   const metadata: SupabaseUploadMetadata = {
@@ -265,7 +327,14 @@ export async function uploadPdfToStorage(
   const fileHash = `${file.name.replace(/[^a-zA-Z0-9.-]/g, "_")}_${file.size}`;
   const localCacheKey = `uploaded_pdf_${studentId}_${fileHash}`;
 
-  const cachedResult = localStorage.getItem(localCacheKey);
+  let cachedResult = "";
+  try {
+    const storageApi = typeof globalThis !== "undefined" ? (globalThis as any).localStorage : undefined;
+    cachedResult = storageApi ? storageApi.getItem(localCacheKey) || "" : "";
+  } catch {
+    cachedResult = "";
+  }
+
   if (cachedResult) {
     try {
       const parsed = JSON.parse(cachedResult);
@@ -294,7 +363,14 @@ export async function uploadPdfToStorage(
   );
 
   const resultString = JSON.stringify(metadata);
-  localStorage.setItem(localCacheKey, resultString);
+  try {
+    const storageApi = typeof globalThis !== "undefined" ? (globalThis as any).localStorage : undefined;
+    if (storageApi) {
+      storageApi.setItem(localCacheKey, resultString);
+    }
+  } catch {
+    // Ignore localStorage persistence issues in non-browser runtimes.
+  }
 
   return resultString;
 }
@@ -359,6 +435,7 @@ export async function getResolvedViewUrl(
   rawPathOrUrl?: string
 ): Promise<string> {
   const bucket = getBucketName(bucketInput);
+  const bucketIsPublic = String(getRuntimeEnvValue("VITE_SUPABASE_BUCKET_PUBLIC", "true")).trim().toLowerCase() === "true";
 
   if (!rawPathOrUrl) {
     console.error("[StorageService] Missing storage path or URL");
@@ -388,6 +465,11 @@ export async function getResolvedViewUrl(
     return cleanInput;
   }
 
+  if (isInvalidStorageReference(cleanInput)) {
+    console.error(`[StorageService] Rejected invalid storage path reference for bucket "${bucket}":`, cleanInput);
+    throw new Error("Invalid storage path specified.");
+  }
+
   // If cleanInput is an external HTTP/HTTPS URL that is NOT a Supabase storage URL, return it directly
   if (cleanInput.startsWith("http://") || cleanInput.startsWith("https://")) {
     const isSupabaseStorage = cleanInput.includes("/storage/v1/object/");
@@ -412,7 +494,13 @@ export async function getResolvedViewUrl(
     throw new Error("Invalid storage path specified.");
   }
 
-  // 1. Generate fresh signed URL (valid for 1 hour = 3600 seconds)
+  if (bucketIsPublic) {
+    const { data: publicData } = supabase.storage.from(bucket).getPublicUrl(sanitizedPath);
+    const publicUrl = publicData?.publicUrl || (cleanInput.startsWith("http") ? cleanInput : "");
+    console.log(`[StorageService] Final URL used by viewer (Public URL): ${publicUrl}`);
+    return publicUrl || cleanInput;
+  }
+
   try {
     const { data, error } = await supabase.storage
       .from(bucket)
@@ -426,13 +514,12 @@ export async function getResolvedViewUrl(
     }
 
     if (error) {
-      console.warn(`[StorageService] createSignedUrl warning (${error.message}). Trying getPublicUrl fallback.`);
+      console.warn(`[StorageService] createSignedUrl warning (${error.message}). Falling back to public URL.`);
     }
   } catch (err: any) {
-    console.warn(`[StorageService] createSignedUrl exception (${err.message}). Trying getPublicUrl fallback.`);
+    console.warn(`[StorageService] createSignedUrl exception (${err.message}). Falling back to public URL.`);
   }
 
-  // 2. Fallback to public URL
   const { data: publicData } = supabase.storage.from(bucket).getPublicUrl(sanitizedPath);
   const finalPublicUrl = publicData?.publicUrl || (cleanInput.startsWith("http") ? cleanInput : "");
   console.log(`[StorageService] Final URL used by viewer (Public URL Fallback): ${finalPublicUrl}`);
@@ -453,6 +540,10 @@ export async function downloadFileFromStorage(
 
   console.log(`[StorageService] Initiating direct file download: bucket="${bucket}", path="${storagePath}"`);
 
+  if (!storagePath) {
+    throw new Error("Invalid storage path specified.");
+  }
+
   try {
     const { data, error } = await supabase.storage.from(bucket).download(storagePath);
     console.log("[StorageService] Download API response:", { data, error });
@@ -461,11 +552,10 @@ export async function downloadFileFromStorage(
       throw error;
     }
 
-    if (!data) {
-      throw new Error("Received empty blob from storage.");
-    }
+    const pdfBlob = validatePdfBlob(data);
+    console.log(`[StorageService] Download validation succeeded. bucket=${bucket} path=${storagePath} blobSize=${pdfBlob.size} mimeType=${pdfBlob.type || "unknown"}`);
 
-    const blobUrl = URL.createObjectURL(data);
+    const blobUrl = URL.createObjectURL(pdfBlob);
     const link = document.createElement("a");
     link.href = blobUrl;
     link.download = fileName;
@@ -478,19 +568,14 @@ export async function downloadFileFromStorage(
 
     console.log(`[StorageService] Successfully downloaded: ${fileName}`);
   } catch (error: any) {
-    console.error("[StorageService] Direct SDK download failed, attempting signed URL fallback:", error);
-    
-    // Fallback: fetch fresh signed URL and open
-    const freshSignedUrl = await getResolvedViewUrl(bucket, storagePath);
-    console.log(`[StorageService] Opening fallback signed URL for download: ${freshSignedUrl}`);
-    const link = document.createElement("a");
-    link.href = freshSignedUrl;
-    link.download = fileName;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    console.error("[StorageService] Direct SDK download failed:", {
+      bucket,
+      storagePath,
+      fileName,
+      supabaseError: error,
+      stack: error?.stack,
+    });
+    throw new Error(error?.message || "Failed to download PDF from storage.");
   }
 }
 
